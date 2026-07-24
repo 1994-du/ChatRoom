@@ -237,6 +237,7 @@ import { useUserStore } from '@/stores/user'
 import { getUploadFileUrl, getUploadVoiceUrl, uploadFile, uploadImage } from '@/api/upload'
 import wsService from '@/utils/websocket'
 import { resolveUserProfile } from '@/utils/userProfile'
+import { waitForAuthReady } from '@/utils/authReady'
 import {
   openCamera as nativeOpenCamera,
   openGallery as nativeOpenGallery,
@@ -309,11 +310,17 @@ const getChatAuthContext = () => {
     && userStore.id !== undefined
     && String(userStore.id).trim() !== ''
     && Number.isFinite(normalizedUserId)
+  const username = typeof userStore.username === 'string'
+    ? userStore.username.trim()
+    : ''
+  const hasUsername = Boolean(username)
 
   return {
     hasToken: Boolean(userStore.token),
     userId: hasUserId ? normalizedUserId : null,
-    hasAuth: Boolean(userStore.token) && hasUserId
+    username,
+    hasProfile: Boolean(userStore.profileReady),
+    hasAuth: Boolean(userStore.token) && hasUserId && hasUsername && Boolean(userStore.profileReady)
   }
 }
 
@@ -487,12 +494,12 @@ const getFileInputKind = (target) => {
 }
 
 const getWsConnectOptions = () => {
-  const { hasToken, userId, hasAuth } = getChatAuthContext()
+  const { hasToken, userId, username, hasAuth } = getChatAuthContext()
   const options = {
     url: import.meta.env.VITE_WS_URL || import.meta.env.VITE_PROXY_WS || 'ws://localhost:1234/ws',
     userInfo: {
       userId,
-      username: userStore.username,
+      username,
       avatar: userStore.avatar
     }
   }
@@ -502,6 +509,7 @@ const getWsConnectOptions = () => {
     hasToken,
     userId,
     hasAuth,
+    hasProfile: userStore.profileReady,
     username: options.userInfo.username,
     hasAvatar: Boolean(options.userInfo.avatar)
   })
@@ -510,6 +518,8 @@ const getWsConnectOptions = () => {
 }
 
 const ensureChatSocketReady = async ({ silent = false } = {}) => {
+  await waitForAuthReady()
+
   console.info('[H5][PublicChat] ensureChatSocketReady enter:', {
     silent,
     isConnected: wsService.isConnected,
@@ -524,7 +534,8 @@ const ensureChatSocketReady = async ({ silent = false } = {}) => {
     console.warn('[H5][PublicChat] ensureChatSocketReady skipped: auth incomplete', {
       hasToken: Boolean(userStore.token),
       userId: userStore.id || null,
-      username: userStore.username || ''
+      username: userStore.username || '',
+      profileReady: userStore.profileReady
     })
     if (!silent) {
       showToast('登录信息未就绪，请稍后重试')
@@ -1077,11 +1088,15 @@ const setKeyboardHeight = (visible, height) => {
 }
 
 const initWebSocket = async ({ silent = true } = {}) => {
-  const { hasToken, userId, hasAuth } = getChatAuthContext()
+  await waitForAuthReady()
+
+  const { hasToken, userId, username, hasAuth } = getChatAuthContext()
   console.info('[H5][PublicChat] initWebSocket:', {
     hasToken,
     userId,
     hasAuth,
+    username,
+    profileReady: userStore.profileReady,
     isConnected: wsService.isConnected,
     isReady: wsService.isReady
   })
@@ -1089,7 +1104,8 @@ const initWebSocket = async ({ silent = true } = {}) => {
     console.warn('[H5][PublicChat] WebSocket skipped: auth incomplete', {
       hasToken,
       userId,
-      username: userStore.username || ''
+      username,
+      profileReady: userStore.profileReady
     })
     return false
   }
@@ -1203,21 +1219,37 @@ watch(activePanel, () => {
 })
 
 watch(
-  () => [userStore.token, userStore.id],
+  () => [userStore.token, userStore.id, userStore.username, userStore.avatar, userStore.profileReady],
   () => {
-    const { hasToken, userId, hasAuth } = getChatAuthContext()
+    const { hasToken, userId, username, hasAuth } = getChatAuthContext()
     if (!hasAuth) {
       return
     }
 
-    if (!wsService.isConnected || !wsService.isReady) {
+    const currentUserInfo = wsService.userInfo || {}
+    const hasValidSocketUserInfo = Number(currentUserInfo.userId) === userId
+      && String(currentUserInfo.username || '').trim() === username
+      && String(currentUserInfo.avatar || '') === String(userStore.avatar || '')
+
+    if (!wsService.isConnected || !wsService.isReady || !hasValidSocketUserInfo) {
       console.info('[H5][PublicChat] auth ready, ensuring WebSocket connection:', {
         hasToken,
         userId,
+        username,
         isConnected: wsService.isConnected,
-        isReady: wsService.isReady
+        isReady: wsService.isReady,
+        hasValidSocketUserInfo
       })
-      void initWebSocket({ silent: true })
+      void (async () => {
+        if (wsService.isConnected || wsService.isReady) {
+          wsService.close()
+          await new Promise((resolve) => setTimeout(resolve, 150))
+        }
+
+        if (getChatAuthContext().hasAuth) {
+          await initWebSocket({ silent: true })
+        }
+      })()
     }
   }
 )
@@ -1557,12 +1589,19 @@ onMounted(() => {
   scrollToBottom()
   nextTick(() => {
     resizeTextarea()
-    const { hasAuth } = getChatAuthContext()
-    if (hasAuth) {
-      void initWebSocket({ silent: true })
-    } else {
-      console.info('[H5][PublicChat] skip initial websocket connect: auth incomplete')
-    }
+    void waitForAuthReady().then(() => {
+      const { hasAuth } = getChatAuthContext()
+      if (hasAuth) {
+        void initWebSocket({ silent: true })
+      } else {
+        console.info('[H5][PublicChat] skip initial websocket connect: profile incomplete', {
+          hasToken: Boolean(userStore.token),
+          userId: userStore.id || null,
+          username: userStore.username || '',
+          profileReady: userStore.profileReady
+        })
+      }
+    })
   })
 })
 

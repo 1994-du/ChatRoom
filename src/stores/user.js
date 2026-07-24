@@ -9,6 +9,7 @@ export const useUserStore = defineStore('user', {
     avatar: '',
     token: '',
     username: '',
+    profileReady: false,
     menus: [],
     gender: null,
     roleId: null,
@@ -30,6 +31,7 @@ export const useUserStore = defineStore('user', {
       this.roleId = profile.roleId
       this.roleName = profile.roleName
       this.menus = profile.menus
+      this.profileReady = false
       this.token = token || this.token || ''
 
       if (this.token) {
@@ -54,6 +56,7 @@ export const useUserStore = defineStore('user', {
       this.roleId = profile.roleId
       this.roleName = profile.roleName
       this.menus = profile.menus
+      this.profileReady = true
 
       if (this.token) {
         setToken(this.token, expire)
@@ -67,6 +70,7 @@ export const useUserStore = defineStore('user', {
       this.avatar = ''
       this.token = ''
       this.username = ''
+      this.profileReady = false
       this.menus = []
       this.gender = null
       this.roleId = null
