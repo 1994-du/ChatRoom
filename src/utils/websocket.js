@@ -83,6 +83,14 @@ const parseSocketPayload = (payload) => {
   }
 }
 
+const stringifyForLog = (value) => {
+  try {
+    return JSON.stringify(value)
+  } catch (error) {
+    return '[unserializable]'
+  }
+}
+
 const parseJsonObject = (value) => {
   if (typeof value !== 'string') {
     return null
@@ -1211,7 +1219,12 @@ class WebSocketService {
         this.emit('chatHistory', this.addHistoryMessages(data.payload))
         break
       case 'onlineUsers':
-        console.log('收到在线用户列表:', data.payload)
+        console.log('[H5][OnlineUsers][raw]', {
+          payload: data.payload,
+          payloadJson: stringifyForLog(data.payload),
+          isArray: Array.isArray(data.payload),
+          count: Array.isArray(data.payload) ? data.payload.length : null
+        })
         this.emit('onlineUsers', data.payload)
         break
       case 'userOnline':
@@ -1437,11 +1450,21 @@ class WebSocketService {
   // 发送上线通知
   sendOnline() {
     if (this.isConnected && this.isReady && this.userInfo) {
+      const username = this.userInfo.username
+        || this.userInfo.userName
+        || this.userInfo.nickname
+        || this.userInfo.name
+        || this.userInfo.fromUsername
+        || ''
       const onlineMsg = {
         type: 'userOnline',
         payload: {
           userId: this.userInfo.userId,
-          username: this.userInfo.username,
+          username,
+          userName: username,
+          name: username,
+          nickname: username,
+          fromUsername: username,
           avatar: this.userInfo.avatar
         }
       }
@@ -1457,11 +1480,21 @@ class WebSocketService {
   // 发送下线通知
   sendOffline() {
     if (this.isConnected && this.isReady && this.userInfo) {
+      const username = this.userInfo.username
+        || this.userInfo.userName
+        || this.userInfo.nickname
+        || this.userInfo.name
+        || this.userInfo.fromUsername
+        || ''
       const offlineMsg = {
         type: 'userOffline',
         payload: {
           userId: this.userInfo.userId,
-          username: this.userInfo.username
+          username,
+          userName: username,
+          name: username,
+          nickname: username,
+          fromUsername: username
         }
       }
       try {

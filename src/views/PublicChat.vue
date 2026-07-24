@@ -1440,7 +1440,14 @@ const playVoice = (voiceUrl) => {
 }
 
 const handleOnlineUsers = (users) => {
-  console.log('收到在线用户列表:', users)
+  console.log('[H5][PublicChat][onlineUsers raw]', users)
+  console.log('[H5][PublicChat][onlineUsers raw JSON]', (() => {
+    try {
+      return JSON.stringify(users)
+    } catch (error) {
+      return '[unserializable]'
+    }
+  })())
   const currentUserId = getChatAuthContext().userId
   const sourceUsers = Array.isArray(users) ? users : (users ? [users] : [])
   const normalizedUsers = new Map()
@@ -1463,6 +1470,7 @@ const handleOnlineUsers = (users) => {
   })
 
   onlineUsers.value = Array.from(normalizedUsers.values())
+  console.log('[H5][PublicChat][onlineUsers normalized]', onlineUsers.value)
 }
 
 const handleUserOnline = (user) => {
