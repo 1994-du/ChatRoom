@@ -71,10 +71,10 @@
               <span>在线用户 ({{ onlineUsers.length }})</span>
               <van-icon name="cross" size="20" @click="showOnlineUsers = false" />
             </div>
-            <div class="user-list">
-              <div 
-                v-for="user in onlineUsers" 
-                :key="user.userId"
+                <div class="user-list">
+                  <div
+                v-for="(user, index) in onlineUsers"
+                :key="user.userId ?? user.username ?? index"
                 class="user-item"
               >
                 <van-image
@@ -236,6 +236,7 @@ import { showImagePreview, showToast } from 'vant'
 import { useUserStore } from '@/stores/user'
 import { getUploadFileUrl, getUploadVoiceUrl, uploadFile, uploadImage } from '@/api/upload'
 import wsService from '@/utils/websocket'
+import { resolveUserProfile } from '@/utils/userProfile'
 import {
   openCamera as nativeOpenCamera,
   openGallery as nativeOpenGallery,
@@ -315,6 +316,57 @@ const getChatAuthContext = () => {
     hasAuth: Boolean(userStore.token) && hasUserId
   }
 }
+
+const getOnlineUserDisplayName = (user, fallbackIndex = 0) => {
+  const profile = resolveUserProfile(user)
+  const candidates = [
+    profile.username,
+    user?.username,
+    user?.userName,
+    user?.name,
+    user?.nickname,
+    user?.realName,
+    user?.fromUsername,
+    user?.senderName,
+    user?.fromName,
+    user?.displayName
+  ]
+  const displayName = candidates.find((value) => typeof value === 'string' && value.trim())
+
+  if (displayName) {
+    return displayName.trim()
+  }
+
+  const rawUserId = profile.userId ?? user?.userId ?? user?.id ?? user?.uid
+  if (rawUserId !== null && rawUserId !== undefined && String(rawUserId).trim()) {
+    return `用户${String(rawUserId).trim()}`
+  }
+
+  return `用户${fallbackIndex + 1}`
+}
+
+const normalizeOnlineUser = (user, fallbackIndex = 0) => {
+  const profile = resolveUserProfile(user)
+  const rawUserId = profile.userId ?? user?.userId ?? user?.id ?? user?.uid ?? null
+  const numericUserId = Number(rawUserId)
+  const userId = Number.isFinite(numericUserId) ? numericUserId : rawUserId
+  const avatar = profile.avatar
+    || user?.avatar
+    || user?.avatarUrl
+    || user?.headImg
+    || user?.headImage
+    || user?.photo
+    || ''
+
+  return {
+    ...user,
+    userId,
+    username: getOnlineUserDisplayName(user, fallbackIndex),
+    avatar: wsService.getAvatarUrl(avatar)
+  }
+}
+
+const getOnlineUserKey = (user) => String(user.userId ?? user.username)
 
 const isBrowserVoiceRecordSupported = () => {
   const nav = typeof navigator === 'undefined' ? null : navigator
@@ -1389,43 +1441,60 @@ const playVoice = (voiceUrl) => {
 
 const handleOnlineUsers = (users) => {
   console.log('收到在线用户列表:', users)
-  const currentUserId = Number(userStore.id)
-  onlineUsers.value = (users || [])
-    .filter(u => Number(u.userId) !== currentUserId)
-    .map(u => {
-      const avatarUrl = wsService.getAvatarUrl(u.avatar)
-      console.log('处理在线用户头像:', { userId: u.userId, username: u.username, avatar: u.avatar, avatarUrl })
-      return {
-        ...u,
-        avatar: avatarUrl
-      }
-    })
+  const currentUserId = getChatAuthContext().userId
+  const sourceUsers = Array.isArray(users) ? users : (users ? [users] : [])
+  const normalizedUsers = new Map()
+
+  sourceUsers.forEach((sourceUser, index) => {
+    const user = normalizeOnlineUser(sourceUser, index)
+    if (currentUserId !== null && Number(user.userId) === currentUserId) {
+      return
+    }
+
+    const userKey = getOnlineUserKey(user)
+    if (!normalizedUsers.has(userKey)) {
+      console.log('处理在线用户:', {
+        userId: user.userId,
+        username: user.username,
+        avatar: user.avatar
+      })
+      normalizedUsers.set(userKey, user)
+    }
+  })
+
+  onlineUsers.value = Array.from(normalizedUsers.values())
 }
 
 const handleUserOnline = (user) => {
-  console.log('用户上线:', user)
-  if (Number(user.userId) !== Number(userStore.id)) {
-    const exists = onlineUsers.value.find(u => u.userId === user.userId)
-    if (!exists) {
-      const avatarUrl = wsService.getAvatarUrl(user.avatar)
-      console.log('处理上线用户头像:', { userId: user.userId, username: user.username, avatar: user.avatar, avatarUrl })
-      onlineUsers.value.push({
-        ...user,
-        avatar: avatarUrl
-      })
+  const normalizedUser = normalizeOnlineUser(user)
+  const currentUserId = getChatAuthContext().userId
+  console.log('用户上线:', normalizedUser)
+  if (currentUserId === null || Number(normalizedUser.userId) !== currentUserId) {
+    const userKey = getOnlineUserKey(normalizedUser)
+    const existingIndex = onlineUsers.value.findIndex((item) => getOnlineUserKey(item) === userKey)
+    if (existingIndex === -1) {
+      onlineUsers.value.push(normalizedUser)
+    } else {
+      onlineUsers.value[existingIndex] = {
+        ...onlineUsers.value[existingIndex],
+        ...normalizedUser
+      }
     }
-    showUserNotify(`${user.username} 上线了`, '#07c160')
+    showUserNotify(`${normalizedUser.username} 上线了`, '#07c160')
   }
 }
 
 const handleUserOffline = (user) => {
-  console.log('用户下线:', user)
-  if (Number(user.userId) !== Number(userStore.id)) {
-    const index = onlineUsers.value.findIndex(u => u.userId === user.userId)
-    if (index !== -1) {
+  const normalizedUser = normalizeOnlineUser(user)
+  const currentUserId = getChatAuthContext().userId
+  console.log('用户下线:', normalizedUser)
+  if (currentUserId === null || Number(normalizedUser.userId) !== currentUserId) {
+    const userKey = getOnlineUserKey(normalizedUser)
+    const index = onlineUsers.value.findIndex((item) => getOnlineUserKey(item) === userKey)
+    if (index >= 0) {
       onlineUsers.value.splice(index, 1)
     }
-    showUserNotify(`${user.username} 下线了`, '#ff976a')
+    showUserNotify(`${normalizedUser.username} 下线了`, '#ff976a')
   }
 }
 
@@ -1451,17 +1520,9 @@ onMounted(() => {
     userId: userStore.id || null,
     username: userStore.username || ''
   })
-  scrollToBottom()
-  nextTick(() => {
-    resizeTextarea()
-    const { hasAuth } = getChatAuthContext()
-    if (hasAuth) {
-      void initWebSocket({ silent: true })
-    } else {
-      console.info('[H5][PublicChat] skip initial websocket connect: auth incomplete')
-    }
-  })
-  
+  wsService.clearMessages()
+  onlineUsers.value = []
+
   wsService.on('ready', handleReady)
   wsService.on('chat', handleChatMessage)
   wsService.on('chatHistory', handleChatHistory)
@@ -1484,9 +1545,22 @@ onMounted(() => {
     console.log('输入法状态:', { visible, height })
     setKeyboardHeight(visible, height)
   })
+
+  scrollToBottom()
+  nextTick(() => {
+    resizeTextarea()
+    const { hasAuth } = getChatAuthContext()
+    if (hasAuth) {
+      void initWebSocket({ silent: true })
+    } else {
+      console.info('[H5][PublicChat] skip initial websocket connect: auth incomplete')
+    }
+  })
 })
 
 onUnmounted(() => {
+  console.info('[H5][PublicChat] onUnmounted: closing websocket')
+  wsService.close()
   wsService.off('ready', handleReady)
   wsService.off('chat', handleChatMessage)
   wsService.off('chatHistory', handleChatHistory)
