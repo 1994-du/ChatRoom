@@ -320,7 +320,7 @@ const getChatAuthContext = () => {
     userId: hasUserId ? normalizedUserId : null,
     username,
     hasProfile: Boolean(userStore.profileReady),
-    hasAuth: Boolean(userStore.token) && hasUserId && hasUsername && Boolean(userStore.profileReady)
+    hasAuth: Boolean(userStore.token) && hasUserId && hasUsername
   }
 }
 
