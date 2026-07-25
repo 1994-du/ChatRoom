@@ -36,10 +36,33 @@ const DIRECT_IMAGE_FIELDS = [
   'pic',
   'photo',
   'mediaUrl',
+  'previewImage',
+  'previewUrl',
   'thumbnail',
   'thumb'
 ]
-const ORIGINAL_IMAGE_FIELDS = ['originalUrl', 'originUrl', 'fullUrl', 'fullImageUrl', 'rawUrl', 'sourceUrl']
+const ORIGINAL_IMAGE_FIELDS = [
+  'originalImage',
+  'originalImageUrl',
+  'originalUrl',
+  'originUrl',
+  'fullUrl',
+  'fullImageUrl',
+  'rawUrl',
+  'sourceUrl',
+  'image',
+  'imageUrl'
+]
+const PREVIEW_IMAGE_FIELDS = [
+  'previewImage',
+  'previewUrl',
+  'thumbnail',
+  'thumbnailUrl',
+  'thumb',
+  'thumbUrl',
+  'smallImage',
+  'smallImageUrl'
+]
 const DIRECT_VOICE_FIELDS = [
   'voice',
   'voiceUrl',
@@ -704,9 +727,9 @@ class WebSocketService {
   }
 
   extractPreviewImageSource(source, imageSource, sourceType) {
-    const originalImage = this.getStringField(source, ORIGINAL_IMAGE_FIELDS)
-    if (originalImage) {
-      return originalImage
+    const previewImage = this.getStringField(source, PREVIEW_IMAGE_FIELDS)
+    if (previewImage) {
+      return previewImage
     }
 
     return imageSource || this.extractImageSource(source, sourceType)
@@ -837,9 +860,14 @@ class WebSocketService {
     const sourceType = source.type || source.messageType || source.contentType || payload?.messageType || payload?.type
     const voiceSource = this.extractVoiceSource(source, sourceType)
     const imageSource = this.isVoiceMessageType(sourceType) ? null : this.extractImageSource(source, sourceType)
-    const previewImageSource = this.extractPreviewImageSource(source, imageSource, sourceType)
-    const image = imageSource?.value || ''
-    const previewImage = previewImageSource?.value || image
+    const displayImageSource = this.isVoiceMessageType(sourceType)
+      ? null
+      : this.extractPreviewImageSource(source, imageSource, sourceType)
+    const originalImageSource = this.isVoiceMessageType(sourceType)
+      ? null
+      : this.getStringField(source, ORIGINAL_IMAGE_FIELDS) || imageSource
+    const image = displayImageSource?.value || originalImageSource?.value || ''
+    const previewImage = originalImageSource?.value || image
     const voice = voiceSource?.value || ''
     const type = sourceType === 'card'
       ? 'card'
@@ -889,16 +917,17 @@ class WebSocketService {
       previewImage: previewImage ? this.getAvatarUrl(previewImage) : '',
       voice: voice ? this.getAvatarUrl(voice) : '',
       voiceDuration: this.getVoiceDuration(source),
-      sourceImage: image,
-      sourcePreviewImage: previewImage,
+      sourceImage: previewImage,
+      sourcePreviewImage: image,
       sourceVoice: voice,
       imageField: imageSource?.field || '',
-      previewImageField: previewImageSource?.field || '',
+      previewImageField: displayImageSource?.field || '',
       voiceField: voiceSource?.field || '',
       avatar: this.getAvatarUrl(avatar),
       time: this.formatTime(rawTime),
       rawTime: normalizedRawTime,
-      sourceMessageId
+      sourceMessageId,
+      clientMessageId: source.clientMessageId || ''
     }
   }
 

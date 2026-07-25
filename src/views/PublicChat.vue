@@ -262,6 +262,7 @@ const onlineUsers = ref([])
 const keyboardHeight = ref(0)
 const textareaRef = ref(null)
 const activePanel = ref('')
+const pendingImageMessages = ref([])
 const isVoiceMode = ref(false)
 const isRecording = ref(false)
 const isVoiceProcessing = ref(false)
@@ -673,17 +674,19 @@ const uploadVoiceFile = async (voiceSource, fileName = '', mimeType = '') => {
   }
 }
 
-const uploadChatImage = async (imageSource, source = 'gallery') => {
+const uploadChatImage = async (imageSource, source = 'gallery', options = {}) => {
   if (isRemoteImageUrl(imageSource)) {
     return imageSource.trim()
   }
 
-  const toast = showToast({
-    type: 'loading',
-    message: '图片上传中...',
-    forbidClick: true,
-    duration: 0
-  })
+  const toast = options.showLoading === false
+    ? null
+    : showToast({
+      type: 'loading',
+      message: '图片上传中...',
+      forbidClick: false,
+      duration: 0
+    })
 
   try {
     const size = imageSource?.size || (typeof imageSource === 'string' ? imageSource.length : 0)
@@ -703,21 +706,141 @@ const uploadChatImage = async (imageSource, source = 'gallery') => {
 
     return imageUrl
   } finally {
-    toast.close()
+    toast?.close()
   }
 }
 
-const sendImageMessage = async (imageUrl, source = 'gallery') => {
-  const isReady = await ensureChatSocketReady()
-  if (!isReady) {
-    return
+const createImageThumbnail = (imageSource, maxDimension = 480) => {
+  if (typeof Image === 'undefined' || !imageSource) {
+    return Promise.resolve('')
   }
 
+  let objectUrl = ''
+  let imageUrl = imageSource
+  if (typeof Blob !== 'undefined' && imageSource instanceof Blob) {
+    objectUrl = URL.createObjectURL(imageSource)
+    imageUrl = objectUrl
+  }
+
+  return new Promise((resolve) => {
+    const image = new Image()
+    image.decoding = 'async'
+    image.onload = () => {
+      try {
+        const longestSide = Math.max(image.naturalWidth || image.width, image.naturalHeight || image.height)
+        const scale = longestSide > maxDimension ? maxDimension / longestSide : 1
+        const canvas = document.createElement('canvas')
+        canvas.width = Math.max(1, Math.round((image.naturalWidth || image.width) * scale))
+        canvas.height = Math.max(1, Math.round((image.naturalHeight || image.height) * scale))
+        const context = canvas.getContext('2d')
+        if (!context) {
+          resolve('')
+          return
+        }
+
+        context.drawImage(image, 0, 0, canvas.width, canvas.height)
+        resolve(canvas.toDataURL('image/jpeg', 0.72))
+      } catch (error) {
+        console.warn('生成图片缩略图失败:', error)
+        resolve('')
+      } finally {
+        if (objectUrl) {
+          URL.revokeObjectURL(objectUrl)
+        }
+      }
+    }
+    image.onerror = () => {
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl)
+      }
+      resolve('')
+    }
+    image.src = imageUrl
+  })
+}
+
+const createImageClientMessageId = () => (
+  `img_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+)
+
+const getMessageTime = () => {
   const now = new Date()
-  const hours = now.getHours().toString().padStart(2, '0')
-  const minutes = now.getMinutes().toString().padStart(2, '0')
-  const time = `${hours}:${minutes}`
-  const clientMessageId = `img_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+  return {
+    rawTime: now.toISOString(),
+    time: `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`
+  }
+}
+
+const addPendingImageMessage = ({
+  clientMessageId,
+  image,
+  previewImage,
+  source,
+  rawTime,
+  time,
+  temporaryPreviewUrl = ''
+}) => {
+  pendingImageMessages.value.push({
+    id: clientMessageId,
+    clientMessageId,
+    type: 'image',
+    messageType: 'image',
+    fromUsername: userStore.username || '我',
+    userId: Number(userStore.id),
+    message: '',
+    image: image || previewImage,
+    previewImage: previewImage || image,
+    sourceImage: previewImage || image,
+    sourcePreviewImage: image || previewImage,
+    avatar: wsService.getAvatarUrl(userStore.avatar),
+    time,
+    rawTime,
+    source,
+    uploading: true,
+    temporaryPreviewUrl
+  })
+}
+
+const updatePendingImageMessage = (clientMessageId, patch) => {
+  const message = pendingImageMessages.value.find(
+    (item) => item.clientMessageId === clientMessageId
+  )
+  if (message) {
+    Object.assign(message, patch)
+  }
+  return message
+}
+
+const removePendingImageMessage = (clientMessageId) => {
+  const index = pendingImageMessages.value.findIndex(
+    (item) => item.clientMessageId === clientMessageId
+  )
+  if (index < 0) return
+
+  const [message] = pendingImageMessages.value.splice(index, 1)
+  if (message?.temporaryPreviewUrl && typeof URL !== 'undefined') {
+    URL.revokeObjectURL(message.temporaryPreviewUrl)
+  }
+}
+
+const isSameImageSource = (left, right) => (
+  left === right
+  || (
+    typeof left === 'string'
+    && typeof right === 'string'
+    && left.trim() === right.trim()
+  )
+)
+
+const sendImageMessage = async (imageUrl, source = 'gallery', options = {}) => {
+  const isReady = await ensureChatSocketReady()
+  if (!isReady) {
+    return false
+  }
+
+  const { time, rawTime } = options.timeInfo || getMessageTime()
+  const clientMessageId = options.clientMessageId || createImageClientMessageId()
+  const previewImageUrl = options.previewImageUrl || imageUrl
 
   wsService.send({
     type: 'chat',
@@ -730,8 +853,13 @@ const sendImageMessage = async (imageUrl, source = 'gallery') => {
       message: '',
       content: '',
       time,
+      rawTime,
       image: imageUrl,
       imageUrl,
+      originalImage: imageUrl,
+      originalUrl: imageUrl,
+      previewImage: previewImageUrl,
+      thumbnail: previewImageUrl,
       type: 'image',
       messageType: 'image',
       source
@@ -739,6 +867,96 @@ const sendImageMessage = async (imageUrl, source = 'gallery') => {
   })
 
   activePanel.value = ''
+  return true
+}
+
+const sendImageWithPreview = async (imageSource, source = 'gallery', providedPreviewImage = '') => {
+  const isReady = await ensureChatSocketReady()
+  if (!isReady) {
+    return
+  }
+
+  const clientMessageId = createImageClientMessageId()
+  const timeInfo = getMessageTime()
+  let temporaryPreviewUrl = ''
+  let localPreviewImage = providedPreviewImage
+
+  if (!localPreviewImage && typeof Blob !== 'undefined' && imageSource instanceof Blob) {
+    temporaryPreviewUrl = URL.createObjectURL(imageSource)
+    localPreviewImage = temporaryPreviewUrl
+  }
+  if (!localPreviewImage) {
+    localPreviewImage = imageSource
+  }
+  const originalPreviewSource = temporaryPreviewUrl
+    || (typeof imageSource === 'string' ? imageSource : localPreviewImage)
+
+  addPendingImageMessage({
+    clientMessageId,
+    image: localPreviewImage,
+    previewImage: originalPreviewSource,
+    source,
+    ...timeInfo,
+    temporaryPreviewUrl
+  })
+  activePanel.value = ''
+  scrollToBottom()
+
+  try {
+    let previewSource = providedPreviewImage
+    if (!previewSource && typeof Blob !== 'undefined' && imageSource instanceof Blob) {
+      previewSource = await createImageThumbnail(imageSource)
+      if (previewSource) {
+        updatePendingImageMessage(clientMessageId, {
+          image: previewSource,
+          sourcePreviewImage: previewSource
+        })
+      }
+    }
+    previewSource = previewSource || imageSource
+
+    const imageUrl = await uploadChatImage(imageSource, source)
+    let previewImageUrl = imageUrl
+    if (previewSource && !isSameImageSource(previewSource, imageSource)) {
+      try {
+        previewImageUrl = await uploadChatImage(
+          previewSource,
+          `${source}-preview`,
+          { showLoading: false }
+        )
+      } catch (error) {
+        console.warn('上传图片缩略图失败，将使用原图:', error)
+      }
+    }
+
+    updatePendingImageMessage(clientMessageId, {
+      image: previewImageUrl,
+      previewImage: imageUrl,
+      sourceImage: imageUrl,
+      sourcePreviewImage: previewImageUrl,
+      uploading: false
+    })
+
+    const sent = await sendImageMessage(imageUrl, source, {
+      clientMessageId,
+      previewImageUrl,
+      timeInfo
+    })
+    if (!sent) {
+      throw new Error('WebSocket 未连接')
+    }
+  } catch (error) {
+    removePendingImageMessage(clientMessageId)
+    throw error
+  } finally {
+    const pendingMessage = pendingImageMessages.value.find(
+      (item) => item.clientMessageId === clientMessageId
+    )
+    if (pendingMessage?.temporaryPreviewUrl && pendingMessage.image !== pendingMessage.temporaryPreviewUrl) {
+      URL.revokeObjectURL(pendingMessage.temporaryPreviewUrl)
+      pendingMessage.temporaryPreviewUrl = ''
+    }
+  }
 }
 
 const sendVoiceMessage = async (voiceUrl, duration = 1) => {
@@ -783,8 +1001,7 @@ const handleFileInputChange = async (event) => {
 
   try {
     const source = getFileInputKind(target)
-    const imageUrl = await uploadChatImage(file, source)
-    await sendImageMessage(imageUrl, source)
+    await sendImageWithPreview(file, source)
   } catch (error) {
     console.error('发送图片失败:', error)
     showToast(error.message || '发送图片失败')
@@ -1141,13 +1358,50 @@ const handleVisibilityChange = () => {
   }
 }
 
+const getMessageTimestamp = (message) => {
+  const timestamp = message?.rawTime ? new Date(message.rawTime).getTime() : 0
+  return Number.isNaN(timestamp) ? 0 : timestamp
+}
+
+const isPendingImageEcho = (message) => pendingImageMessages.value.some((pendingMessage) => {
+  const messageClientId = message?.clientMessageId || message?.sourceMessageId
+  if (messageClientId && messageClientId === pendingMessage.clientMessageId) {
+    return true
+  }
+
+  if (
+    pendingMessage.uploading
+    || message?.type !== 'image'
+    || Number(message.userId) !== Number(pendingMessage.userId)
+  ) {
+    return false
+  }
+
+  const pendingImage = pendingMessage.sourceImage || pendingMessage.previewImage
+  const serverImage = message.sourceImage || message.previewImage || message.image
+  if (!pendingImage || !serverImage) {
+    return false
+  }
+
+  const sameImage = wsService.getImageIdentity(pendingImage)
+    === wsService.getImageIdentity(serverImage)
+  if (!sameImage) {
+    return false
+  }
+
+  const pendingTime = getMessageTimestamp(pendingMessage)
+  const serverTime = getMessageTimestamp(message)
+  return !pendingTime || !serverTime || Math.abs(pendingTime - serverTime) <= 2 * 60 * 1000
+})
+
 const messages = computed(() => {
   const currentUserId = Number(userStore.id)
-  return [...wsService.messages]
+  const serverMessages = wsService.messages.filter((message) => !isPendingImageEcho(message))
+  return [...serverMessages, ...pendingImageMessages.value]
     .filter(msg => msg?.image || msg?.voice || (typeof msg?.message === 'string' && msg.message.trim()))
     .sort((a, b) => {
-      const timeA = a.rawTime ? new Date(a.rawTime).getTime() : (a.id || 0)
-      const timeB = b.rawTime ? new Date(b.rawTime).getTime() : (b.id || 0)
+      const timeA = getMessageTimestamp(a) || (a.id || 0)
+      const timeB = getMessageTimestamp(b) || (b.id || 0)
       return timeA - timeB
     })
     .map(msg => {
@@ -1159,6 +1413,7 @@ const messages = computed(() => {
         isSelf: isSelf,
         image: msg.image || '',
         previewImage: msg.previewImage || msg.image || '',
+        imageUploading: Boolean(msg.uploading),
         voice: msg.voice || '',
         voiceDuration: msg.voiceDuration || 0,
         avatar: msg.avatar,
@@ -1200,11 +1455,14 @@ const scrollToBottom = () => {
   })
 }
 
-watch(() => wsService.messages.length, (newLen, oldLen) => {
-  if (newLen > oldLen) {
-    scrollToBottom()
+watch(
+  () => [wsService.messages.length, pendingImageMessages.value.length],
+  ([newMessageLength, newPendingLength], [oldMessageLength, oldPendingLength]) => {
+    if (newMessageLength > oldMessageLength || newPendingLength > oldPendingLength) {
+      scrollToBottom()
+    }
   }
-})
+)
 
 watch(keyboardHeight, () => {
   nextTick(() => {
@@ -1312,7 +1570,15 @@ const callbackId = `chat_${Date.now()}`
 
 const handlePhotoResult = async (data) => {
   try {
-    const { callbackId: id, image: imageData, imageBase64, imageUrl } = data || {}
+    const {
+      callbackId: id,
+      image: imageData,
+      imageBase64,
+      imageUrl,
+      previewImage,
+      previewBase64,
+      thumbnail
+    } = data || {}
     if (id !== callbackId) return
 
     const rawImage = imageData || imageBase64 || imageUrl
@@ -1321,8 +1587,8 @@ const handlePhotoResult = async (data) => {
       return
     }
 
-    const uploadedImageUrl = await uploadChatImage(rawImage, 'android')
-    await sendImageMessage(uploadedImageUrl, 'android')
+    const localPreviewImage = previewImage || previewBase64 || thumbnail || ''
+    await sendImageWithPreview(rawImage, 'android', localPreviewImage)
   } catch (error) {
     showToast('发送图片失败')
     console.error(error)
