@@ -7,6 +7,12 @@ import {
   registerNativeWebSocketHandlers,
   sendNativeWebSocket
 } from '@/utils/nativeBridge'
+import {
+  appendTokenToWsUrl,
+  getAuthExpiredReason,
+  handleAuthExpired,
+  isAuthExpiredPayload
+} from '@/utils/authSession'
 
 const DEFAULT_AVATAR_URL = `${import.meta.env.BASE_URL}avatar-default.svg`
 const getDefaultWsUrl = () => import.meta.env.VITE_WS_URL || import.meta.env.VITE_PROXY_WS || 'ws://localhost:1234/ws'
@@ -164,6 +170,49 @@ const summarizeSocketValue = (value) => {
 const logSocket = (level, message, payload = {}) => {
   const logger = console[level] || console.log
   logger.call(console, `[H5][WebSocket] ${message}`, payload)
+}
+
+const sanitizeSocketUserInfo = (userInfo) => {
+  if (!userInfo || typeof userInfo !== 'object') {
+    return userInfo
+  }
+
+  return {
+    userId: userInfo.userId ?? null,
+    username: userInfo.username || '',
+    hasAvatar: Boolean(userInfo.avatar),
+    hasToken: Boolean(getSocketAuthToken(userInfo))
+  }
+}
+
+const getSocketAuthToken = (userInfo) => {
+  if (!userInfo || typeof userInfo !== 'object') {
+    return ''
+  }
+
+  return String(
+    userInfo.token
+    || userInfo.accessToken
+    || userInfo.authorization
+    || ''
+  ).trim()
+}
+
+const sanitizeSocketUrl = (url) => {
+  const normalizedUrl = typeof url === 'string' ? url.trim() : ''
+  if (!normalizedUrl) {
+    return normalizedUrl
+  }
+
+  try {
+    const parsedUrl = new URL(normalizedUrl)
+    if (parsedUrl.searchParams.has('token')) {
+      parsedUrl.searchParams.set('token', '***')
+    }
+    return parsedUrl.toString()
+  } catch (error) {
+    return normalizedUrl.replace(/([?&]token=)[^&]+/i, '$1***')
+  }
 }
 
 class WebSocketService {
@@ -951,30 +1000,59 @@ class WebSocketService {
     return this.isBrowserSocketOpen() && this.isConnected && this.isReady
   }
 
+  getAuthenticatedConnectUrl(url, userInfo) {
+    const baseUrl = url || this.lastUrl || getDefaultWsUrl()
+    return appendTokenToWsUrl(baseUrl, getSocketAuthToken(userInfo || this.userInfo))
+  }
+
+  handleSocketAuthExpired(payload, source = 'websocket') {
+    if (!isAuthExpiredPayload(payload)) {
+      return false
+    }
+
+    this.shouldReconnect = false
+    this.isNativeConnecting = false
+    this.isConnected = false
+    this.isReady = false
+    if (this.socketMode === 'native') {
+      closeNativeWebSocket()
+    }
+    if (this.ws) {
+      this.ws.close()
+      this.ws = null
+    }
+    void handleAuthExpired({
+      source,
+      reason: getAuthExpiredReason(payload)
+    })
+    return true
+  }
+
   connect(url, userInfo, options = {}) {
+    const connectUrl = this.getAuthenticatedConnectUrl(url, userInfo)
     logSocket('info', 'connect requested', {
-      url,
-      userInfo: summarizeSocketValue(userInfo),
+      url: sanitizeSocketUrl(connectUrl),
+      userInfo: sanitizeSocketUserInfo(userInfo),
       options: summarizeSocketValue(options),
       nativeAvailable: isNativeWebSocketAvailable()
     })
     if (isNativeWebSocketAvailable()) {
-      this.connectNative(url, userInfo, options)
+      this.connectNative(connectUrl, userInfo, options)
       return
     }
 
-    this.connectBrowser(url, userInfo)
+    this.connectBrowser(connectUrl, userInfo)
   }
 
   connectNative(url, userInfo, { force = false } = {}) {
     logSocket('info', 'connectNative enter', {
-      url,
+      url: sanitizeSocketUrl(url),
       force,
       socketMode: this.socketMode,
       isConnected: this.isConnected,
       isReady: this.isReady,
       isNativeConnecting: this.isNativeConnecting,
-      userInfo: summarizeSocketValue(userInfo)
+      userInfo: sanitizeSocketUserInfo(userInfo)
     })
     if (this.socketMode === 'native' && this.isSocketReady()) {
       console.log('原生 WebSocket 已连接，跳过重复连接')
@@ -1008,7 +1086,7 @@ class WebSocketService {
     this.isNativeConnecting = true
     this.isConnected = false
     this.isReady = false
-    console.log('开始连接原生 WebSocket:', url, '用户信息:', userInfo)
+    console.log('开始连接原生 WebSocket:', sanitizeSocketUrl(url), '用户信息:', sanitizeSocketUserInfo(userInfo))
 
     if (isNativeWebSocketConnected()) {
       this.isNativeConnecting = false
@@ -1021,7 +1099,7 @@ class WebSocketService {
 
     const started = connectNativeWebSocket(url, userInfo)
     logSocket('info', 'connectNative dispatched', {
-      url,
+      url: sanitizeSocketUrl(url),
       started
     })
     if (!started) {
@@ -1040,11 +1118,11 @@ class WebSocketService {
 
   connectBrowser(url, userInfo) {
     logSocket('info', 'connectBrowser enter', {
-      url,
+      url: sanitizeSocketUrl(url),
       socketMode: this.socketMode,
       isConnected: this.isConnected,
       isReady: this.isReady,
-      userInfo: summarizeSocketValue(userInfo)
+      userInfo: sanitizeSocketUserInfo(userInfo)
     })
     if (this.ws && this.ws.readyState === WebSocket.OPEN && this.isConnected) {
       console.log('WebSocket 已连接，跳过重复连接')
@@ -1075,15 +1153,15 @@ class WebSocketService {
     this.lastUrl = url
     this.socketMode = 'browser'
     this.isNativeConnecting = false
-    console.log('开始连接 WebSocket:', url, '用户信息:', userInfo)
+    console.log('开始连接 WebSocket:', sanitizeSocketUrl(url), '用户信息:', sanitizeSocketUserInfo(userInfo))
     this.ws = new WebSocket(url)
     logSocket('info', 'browser socket created', {
-      url
+      url: sanitizeSocketUrl(url)
     })
 
     this.ws.onopen = () => {
       logSocket('info', 'browser socket open', {
-        url: this.lastUrl
+        url: sanitizeSocketUrl(this.lastUrl)
       })
       console.log('WebSocket 连接成功')
       this.isConnected = true
@@ -1112,7 +1190,7 @@ class WebSocketService {
 
     this.ws.onerror = (error) => {
       logSocket('error', 'browser socket error', {
-        url: this.lastUrl,
+        url: sanitizeSocketUrl(this.lastUrl),
         readyState: this.ws?.readyState ?? null,
         error: summarizeSocketValue(error)
       })
@@ -1120,16 +1198,25 @@ class WebSocketService {
       this.emit('error', error)
     }
 
-    this.ws.onclose = () => {
+    this.ws.onclose = (event) => {
+      const closePayload = {
+        code: event?.code ?? null,
+        reason: event?.reason || '',
+        wasClean: Boolean(event?.wasClean)
+      }
       logSocket('warn', 'browser socket close', {
-        url: this.lastUrl,
+        url: sanitizeSocketUrl(this.lastUrl),
         shouldReconnect: this.shouldReconnect,
-        readyState: this.ws?.readyState ?? null
+        readyState: this.ws?.readyState ?? null,
+        closePayload
       })
       console.log('WebSocket 连接关闭')
       this.isConnected = false
       this.isReady = false
-      this.emit('close')
+      this.emit('close', closePayload)
+      if (this.handleSocketAuthExpired(closePayload, 'websocket-close')) {
+        return
+      }
       if (this.shouldReconnect) {
         this.reconnect()
       }
@@ -1181,6 +1268,10 @@ class WebSocketService {
       failed,
       statusData: summarizeSocketValue(statusData)
     })
+
+    if (this.handleSocketAuthExpired(statusData, 'websocket-status')) {
+      return
+    }
 
     if (isConnectedState || connected || ready) {
       const wasReady = this.isReady
@@ -1235,6 +1326,15 @@ class WebSocketService {
       type: data?.type || null,
       payload: summarizeSocketValue(data?.payload)
     })
+
+    if (this.handleSocketAuthExpired(data, 'websocket-message')) {
+      return
+    }
+
+    if (this.handleSocketAuthExpired(data?.payload, 'websocket-message')) {
+      return
+    }
+
     switch (data.type) {
       case 'chat':
         console.log('收到聊天消息:', data.payload)
@@ -1297,19 +1397,19 @@ class WebSocketService {
 
   ensureConnected(url, userInfo, timeout = 8000) {
     logSocket('info', 'ensureConnected enter', {
-      url,
+      url: sanitizeSocketUrl(this.getAuthenticatedConnectUrl(url, userInfo)),
       timeout,
       socketMode: this.socketMode,
       isConnected: this.isConnected,
       isReady: this.isReady,
-      userInfo: summarizeSocketValue(userInfo)
+      userInfo: sanitizeSocketUserInfo(userInfo)
     })
     if (this.isSocketReady()) {
       logSocket('info', 'ensureConnected short-circuit ready', {})
       return Promise.resolve()
     }
 
-    const connectUrl = url || this.lastUrl || getDefaultWsUrl()
+    const connectUrl = this.getAuthenticatedConnectUrl(url, userInfo)
     const connectUserInfo = userInfo || this.userInfo
 
     if (!connectUserInfo) {
@@ -1419,9 +1519,9 @@ class WebSocketService {
 
     this.reconnectTimer = setTimeout(() => {
       logSocket('warn', 'reconnect timer fired', {
-        url: this.lastUrl || getDefaultWsUrl(),
+        url: sanitizeSocketUrl(this.lastUrl || getDefaultWsUrl()),
         socketMode: this.socketMode,
-        userInfo: summarizeSocketValue(this.userInfo)
+        userInfo: sanitizeSocketUserInfo(this.userInfo)
       })
       console.log('尝试重新连接 WebSocket...')
       this.reconnectTimer = null

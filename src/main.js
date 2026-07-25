@@ -7,6 +7,7 @@ import { useUserStore } from '@/stores/user'
 import { initAuth } from '@/utils/login'
 import { getUserInfo } from '@/api/auth'
 import { markAuthReady } from '@/utils/authReady'
+import { registerAuthExpiredHandler } from '@/utils/authSession'
 import { initVConsole } from '@/utils/vconsoleControll'
 
 import Vant from 'vant'
@@ -46,6 +47,29 @@ console.info('[H5][Bootstrap] user store created:', {
   userId: userStore.id || null,
   username: userStore.username || '',
   profileReady: userStore.profileReady
+})
+
+registerAuthExpiredHandler(async ({ source, reason }) => {
+  console.warn('[H5][Auth] auth expired handler triggered:', {
+    source,
+    reason
+  })
+
+  userStore.clearUserInfo()
+  localStorage.removeItem('username')
+
+  const nativeBridge = window.DXCHAT_NATIVE
+  if (typeof nativeBridge?.logout === 'function') {
+    try {
+      await Promise.resolve(nativeBridge.logout())
+    } catch (error) {
+      console.error('[H5][Auth] native logout failed:', error)
+    }
+  }
+
+  if (router.currentRoute.value.path !== '/public-chat') {
+    await router.replace('/public-chat')
+  }
 })
 
 const bootstrapAuth = async () => {

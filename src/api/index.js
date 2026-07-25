@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { getToken } from '@/utils/token'
+import { getAuthExpiredReason, handleAuthExpired, isAuthExpiredPayload } from '@/utils/authSession'
 
 const apiBaseURL = import.meta.env.PROD
   ? import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_PROXY || ''
@@ -37,13 +38,19 @@ request.interceptors.request.use(
 
 // 响应拦截器
 request.interceptors.response.use(
-  (response) => {
+  async (response) => {
     // 对响应数据做点什么
     const { data } = response
     console.log('响应数据:', data)
     
     // 如果返回的状态码不是 200，说明接口出错
     if (data.code !== 200) {
+      if (isAuthExpiredPayload(data) && getToken()) {
+        await handleAuthExpired({
+          source: 'http-response',
+          reason: getAuthExpiredReason(data)
+        })
+      }
       // 可以在这里统一处理错误
       console.error('接口错误:', data.msg)
       return Promise.reject(new Error(data.msg))
@@ -51,7 +58,7 @@ request.interceptors.response.use(
     
     return data
   },
-  (error) => {    
+  async (error) => {
     // 对响应错误做点什么
     const { response } = error
     console.error('[H5][API] request failed:', {
@@ -61,6 +68,21 @@ request.interceptors.response.use(
       message: error.message || ''
     })
     console.log('响应错误:', response)
+
+    const token = getToken()
+    if (
+      token
+      && (
+        response?.status === 401
+        || isAuthExpiredPayload(response?.data)
+        || isAuthExpiredPayload(error.message)
+      )
+    ) {
+      await handleAuthExpired({
+        source: 'http-error',
+        reason: getAuthExpiredReason(response?.data || error.message)
+      })
+    }
     
     return Promise.reject({
       code: response?.status || 0,

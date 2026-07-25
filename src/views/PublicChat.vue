@@ -501,7 +501,8 @@ const getWsConnectOptions = () => {
     userInfo: {
       userId,
       username,
-      avatar: userStore.avatar
+      avatar: userStore.avatar,
+      token: userStore.token
     }
   }
 
