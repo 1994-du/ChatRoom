@@ -31,7 +31,6 @@
         :key="route.name || route.path"
       />
     </router-view>
-    <DxxTabbar v-if="showTabbar" />
   </div>
 </template>
 
@@ -39,7 +38,6 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import DxxHeader from '@/components/DxxHeader.vue'
-import DxxTabbar from '@/components/DxxTabbar.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -48,16 +46,13 @@ const pageTitle = computed(() => route.meta.title || '')
 const showHeader = computed(() => route.meta.showHeader !== false)
 const showBack = computed(() => route.meta.showBack !== false)
 const customBack = computed(() => route.meta.customBack === true)
-const showTabbar = computed(() => route.meta.showTabbar === true)
 const headerBgColor = computed(() => route.meta.headerBgColor || '')
 const headerAction = computed(() => route.meta.showHeaderAction || '')
 const layoutStyle = computed(() => ({
   '--app-header-height': showHeader.value
     ? 'calc(46px + var(--status-bar-height))'
     : '0px',
-  '--app-tabbar-height': showTabbar.value
-    ? 'calc(50px + env(safe-area-inset-bottom))'
-    : '0px'
+  '--app-tabbar-height': '0px'
 }))
 
 const handleBack = () => {

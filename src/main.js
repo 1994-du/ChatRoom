@@ -5,8 +5,6 @@ import router from './router'
 import App from './App.vue'
 import { useUserStore } from '@/stores/user'
 import { initAuth } from '@/utils/login'
-import { getUserInfo } from '@/api/auth'
-import { markAuthReady } from '@/utils/authReady'
 import { registerAuthExpiredHandler } from '@/utils/authSession'
 import { initVConsole } from '@/utils/vconsoleControll'
 
@@ -63,8 +61,7 @@ const userStore = useUserStore(pinia)
 console.info('[H5][Bootstrap] user store created:', {
   hasToken: Boolean(userStore.token),
   userId: userStore.id || null,
-  username: userStore.username || '',
-  profileReady: userStore.profileReady
+  username: userStore.username || ''
 })
 
 registerAuthExpiredHandler(async ({ source, reason }) => {
@@ -74,7 +71,6 @@ registerAuthExpiredHandler(async ({ source, reason }) => {
   })
 
   userStore.clearUserInfo()
-  localStorage.removeItem('username')
 
   const nativeBridge = window.DXCHAT_NATIVE
   if (typeof nativeBridge?.logout === 'function') {
@@ -90,74 +86,26 @@ registerAuthExpiredHandler(async ({ source, reason }) => {
   }
 })
 
-const bootstrapAuth = async () => {
-  let authResult = null
-
-  try {
-    console.info('[H5][Auth] initAuth begin')
-    authResult = await initAuth()
-    if (authResult?.token) {
-      userStore.setAuthSession(authResult.authData, authResult.token, authResult.expire)
-    }
-  } catch (error) {
-    console.error('[H5][Auth] initAuth failed:', error)
-  }
-
-  if (!userStore.token) {
-    console.info('[H5][Auth] profile sync skipped: no token')
-    return {
-      authenticated: false,
-      profileReady: false
-    }
-  }
-
-  try {
-    console.info('[H5][Auth] requesting /me during bootstrap')
-    const profile = await getUserInfo()
-    userStore.setUserInfo(profile)
-    console.info('[H5][Auth] /me synchronized:', {
-      userId: userStore.id || null,
-      username: userStore.username || '',
-      hasAvatar: Boolean(userStore.avatar),
-      profileReady: userStore.profileReady
-    })
-  } catch (error) {
-    console.error('[H5][Auth] bootstrap /me failed:', error)
-  }
-
-  return {
-    authenticated: Boolean(userStore.token),
-    profileReady: userStore.profileReady
-  }
-}
-
-const authBootstrapPromise = bootstrapAuth()
-  .then((result) => {
-    console.info('[H5][Auth] bootstrap complete:', {
-      ...result,
-      userId: userStore.id || null,
-      username: userStore.username || ''
-    })
-    return result
-  })
-  .catch((error) => {
-    console.error('[H5][Auth] bootstrap unexpected failure:', error)
-    return {
-      authenticated: Boolean(userStore.token),
-      profileReady: false
-    }
-  })
-  .finally(() => {
-    markAuthReady({
-      authenticated: Boolean(userStore.token),
-      profileReady: userStore.profileReady
-    })
-  })
-
 app.use(Vant)
 app.use(pinia)
 app.use(router)
 app.mount('#app')
 console.info('[H5][Bootstrap] app mounted')
 
-void authBootstrapPromise
+console.info('[H5][Auth] initAuth begin')
+initAuth()
+  .then((authResult) => {
+    if (authResult?.token) {
+      userStore.setAuthSession(authResult.authData, authResult.token, authResult.expire)
+    }
+
+    console.info('[H5][Auth] initAuth complete:', {
+      handled: Boolean(authResult),
+      hasToken: Boolean(authResult?.token || userStore.token),
+      userId: userStore.id || null,
+      username: userStore.username || ''
+    })
+  })
+  .catch((error) => {
+    console.error('[H5][Auth] initAuth failed:', error)
+  })

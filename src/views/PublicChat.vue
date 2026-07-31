@@ -71,8 +71,8 @@
               <span>在线用户 ({{ onlineUsers.length }})</span>
               <van-icon name="cross" size="20" @click="showOnlineUsers = false" />
             </div>
-                <div class="user-list">
-                  <div
+            <div class="user-list">
+              <div
                 v-for="(user, index) in onlineUsers"
                 :key="user.userId ?? user.username ?? index"
                 class="user-item"
@@ -237,7 +237,6 @@ import { useUserStore } from '@/stores/user'
 import { getUploadFileUrl, getUploadVoiceUrl, uploadFile, uploadImage } from '@/api/upload'
 import wsService from '@/utils/websocket'
 import { resolveUserProfile } from '@/utils/userProfile'
-import { waitForAuthReady } from '@/utils/authReady'
 import {
   openCamera as nativeOpenCamera,
   openGallery as nativeOpenGallery,
@@ -314,14 +313,13 @@ const getChatAuthContext = () => {
   const username = typeof userStore.username === 'string'
     ? userStore.username.trim()
     : ''
-  const hasUsername = Boolean(username)
+  const fallbackUsername = username || (hasUserId ? `用户${normalizedUserId}` : '')
 
   return {
     hasToken: Boolean(userStore.token),
     userId: hasUserId ? normalizedUserId : null,
-    username,
-    hasProfile: Boolean(userStore.profileReady),
-    hasAuth: Boolean(userStore.token) && hasUserId && hasUsername
+    username: fallbackUsername,
+    hasAuth: Boolean(userStore.token) && hasUserId
   }
 }
 
@@ -511,7 +509,6 @@ const getWsConnectOptions = () => {
     hasToken,
     userId,
     hasAuth,
-    hasProfile: userStore.profileReady,
     username: options.userInfo.username,
     hasAvatar: Boolean(options.userInfo.avatar)
   })
@@ -520,8 +517,6 @@ const getWsConnectOptions = () => {
 }
 
 const ensureChatSocketReady = async ({ silent = false } = {}) => {
-  await waitForAuthReady()
-
   console.info('[H5][PublicChat] ensureChatSocketReady enter:', {
     silent,
     isConnected: wsService.isConnected,
@@ -536,8 +531,7 @@ const ensureChatSocketReady = async ({ silent = false } = {}) => {
     console.warn('[H5][PublicChat] ensureChatSocketReady skipped: auth incomplete', {
       hasToken: Boolean(userStore.token),
       userId: userStore.id || null,
-      username: userStore.username || '',
-      profileReady: userStore.profileReady
+      username: userStore.username || ''
     })
     if (!silent) {
       showToast('登录信息未就绪，请稍后重试')
@@ -1306,15 +1300,12 @@ const setKeyboardHeight = (visible, height) => {
 }
 
 const initWebSocket = async ({ silent = true } = {}) => {
-  await waitForAuthReady()
-
   const { hasToken, userId, username, hasAuth } = getChatAuthContext()
   console.info('[H5][PublicChat] initWebSocket:', {
     hasToken,
     userId,
     hasAuth,
     username,
-    profileReady: userStore.profileReady,
     isConnected: wsService.isConnected,
     isReady: wsService.isReady
   })
@@ -1322,8 +1313,7 @@ const initWebSocket = async ({ silent = true } = {}) => {
     console.warn('[H5][PublicChat] WebSocket skipped: auth incomplete', {
       hasToken,
       userId,
-      username,
-      profileReady: userStore.profileReady
+      username
     })
     return false
   }
@@ -1478,7 +1468,7 @@ watch(activePanel, () => {
 })
 
 watch(
-  () => [userStore.token, userStore.id, userStore.username, userStore.avatar, userStore.profileReady],
+  () => [userStore.token, userStore.id, userStore.username, userStore.avatar],
   () => {
     const { hasToken, userId, username, hasAuth } = getChatAuthContext()
     if (!hasAuth) {
@@ -1856,19 +1846,16 @@ onMounted(() => {
   scrollToBottom()
   nextTick(() => {
     resizeTextarea()
-    void waitForAuthReady().then(() => {
-      const { hasAuth } = getChatAuthContext()
-      if (hasAuth) {
-        void initWebSocket({ silent: true })
-      } else {
-        console.info('[H5][PublicChat] skip initial websocket connect: profile incomplete', {
-          hasToken: Boolean(userStore.token),
-          userId: userStore.id || null,
-          username: userStore.username || '',
-          profileReady: userStore.profileReady
-        })
-      }
-    })
+    const { hasAuth } = getChatAuthContext()
+    if (hasAuth) {
+      void initWebSocket({ silent: true })
+    } else {
+      console.info('[H5][PublicChat] skip initial websocket connect: auth incomplete', {
+        hasToken: Boolean(userStore.token),
+        userId: userStore.id || null,
+        username: userStore.username || ''
+      })
+    }
   })
 })
 
