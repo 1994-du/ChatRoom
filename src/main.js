@@ -14,6 +14,24 @@ import Vant from 'vant'
 import 'vant/lib/index.css'
 import './style.less'
 
+const closeWebViewTitle = () => {
+  const dxchat = window.DXCHAT
+
+  if (typeof dxchat?.closeWebViewTitle !== 'function') {
+    console.info('[H5][Native] closeWebViewTitle skipped: DXCHAT unavailable')
+    return
+  }
+
+  try {
+    dxchat.closeWebViewTitle()
+    console.info('[H5][Native] WebView title closed')
+  } catch (error) {
+    console.error('[H5][Native] closeWebViewTitle failed:', error)
+  }
+}
+
+closeWebViewTitle()
+
 const vConsoleInstance = initVConsole()
 console.info('[H5][Bootstrap] vConsole initialized:', {
   available: Boolean(vConsoleInstance),
