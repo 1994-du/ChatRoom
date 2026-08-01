@@ -1,4 +1,4 @@
-name: Deploy Vue3
+name: Deploy ChatRoom
 
 on:
   push:
@@ -31,5 +31,5 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           source: "dist/*"
-          target: "/var/www/html/MyApp"
+          target: "/var/www/html/ChatRoom"
           strip_components: 1
