@@ -5,21 +5,13 @@ const viewLoaders = {
 export const appRoutes = [
   {
     path: '/',
-    redirect: '/public-chat'
-  },
-  {
-    path: '/public-chat',
     name: 'PublicChat',
     component: viewLoaders.PublicChat,
     meta: {
       title: '公共聊天',
-      showBack: false,
+      showBack: true,
       showHeaderAction: 'online-users'
     }
-  },
-  {
-    path: '/:pathMatch(.*)*',
-    redirect: '/public-chat'
   }
 ]
 
